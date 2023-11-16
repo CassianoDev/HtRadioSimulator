@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:mic_stream/mic_stream.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:fluttertoast/fluttertoast.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 void main() {
   runApp(const MyApp());
@@ -30,32 +33,112 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  String _channel = "1";
+  int _channel = 1;
   bool ocupado = true;
-  StreamSubscription<List<int>>? _audioSubscription;
+  StreamSubscription? _mRecordingDataSubscription;
+  Timer? _inactivityTimer;
+  final FlutterSoundRecorder _mRecorder = FlutterSoundRecorder();
+  String chNow = "0";
+  var channel = WebSocketChannel.connect(
+    Uri.parse('ws://168.138.149.216:7070/websocket'),
+  );
+  void _handleInactivity(int channel) {
+    Future.delayed(Duration(seconds: 2), () {
+      setState(() {
+        chNow = chNow.replaceAll(channel.toString(), ""); // Remove o canal da string
+        if (chNow.isEmpty) {
+          // Se não houver mais canais ativos, você pode executar outras ações aqui
+        }
+      });
+    });
+  }
 
-  void _changeChannel(String newChannel) {
+  void _changeChannel(int newChannel) {
     setState(() {
       _channel = newChannel;
     });
   }
 
-  Future<void> _ligarMicrofone() async {
-    // Inicia a captura de áudio do microfone com uma taxa de amostragem específica
-    Stream<Uint8List>? audioStream = await MicStream.microphone(sampleRate: 44100);
 
-    // Ouve o stream de áudio
-    _audioSubscription = audioStream?.listen((samples) {
-      print(samples);
-    });
+  Future<void> _ligarMicrofone() async {
+
+    var status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
+      throw RecordingPermissionException('Microphone permission not granted');
+    }
+    await _mRecorder.openRecorder();
+    var recordingDataController = StreamController<Food>();
+    _mRecordingDataSubscription = recordingDataController.stream.listen((buffer) {
+          if (buffer is FoodData) {
+            String base64Data = base64Encode(buffer.data!);
+            var packet = AudioPacket(_channel, base64Data); // Exemplo: Canal 1
+            channel.sink.add(jsonEncode(packet.toJson()));
+          }
+        });
+    await _mRecorder.startRecorder(
+      toStream: recordingDataController.sink,
+      codec: Codec.pcm16,
+      numChannels: 1,
+      sampleRate: 22100,
+    );
+
   }
-  void _desligarMicrofone() {
+  void _desligarMicrofone() async {
     // Cancela a inscrição para parar a gravação
-    _audioSubscription?.cancel();
+    _mRecordingDataSubscription?.cancel();
+    await _mRecorder.closeRecorder();
+    await _mRecorder.stopRecorder();
   }
   @override
   void initState(){
     super.initState();
+
+    FlutterSoundPlayer player = FlutterSoundPlayer();
+    player.openPlayer(enableVoiceProcessing: false).then((value) {
+      player.startPlayerFromStream(codec: Codec.pcm16, numChannels:1, sampleRate: 22100).then((value) {
+        channel.stream.listen((event) async {
+          var packet = AudioPacket.fromJson(jsonDecode(event));
+          if (packet.channel == _channel) {
+            Uint8List audioData = base64Decode(packet.data);// 'selectedChannel' é o canal escolhido pelo usuário
+            player.foodSink!.add(FoodData(audioData));
+          } else {
+            if(chNow != packet.channel.toString()){
+              setState(() {
+                chNow = chNow + packet.channel.toString();
+              });
+              _handleInactivity(packet.channel);
+            }
+          }
+        },onError: (error) {
+          setState(() {
+            ocupado = true;
+          });
+          Fluttertoast.showToast(
+              msg: "Houve um erro ao tentar conectar ao servidor.",
+              toastLength: Toast.LENGTH_SHORT,
+              gravity: ToastGravity.BOTTOM,
+              timeInSecForIosWeb: 1,
+              backgroundColor: Colors.red,
+              textColor: Colors.white,
+              fontSize: 16.0
+          );
+        },onDone: () {
+          setState(() {
+            ocupado = true;
+          });
+          Fluttertoast.showToast(
+              msg: "Conexão encerrada.",
+              toastLength: Toast.LENGTH_SHORT,
+              gravity: ToastGravity.BOTTOM,
+              timeInSecForIosWeb: 1,
+              backgroundColor: Colors.red,
+              textColor: Colors.white,
+              fontSize: 16.0
+          );
+        });
+      });
+    });
+
     Future.delayed(const Duration(seconds: 2)).then((value) {
       setState(() {
         ocupado = false;
@@ -94,15 +177,23 @@ class _MyHomePageState extends State<MyHomePage> {
                   crossAxisCount: 3,
                 ),
                 itemBuilder: (BuildContext context, int index) {
+
                   return GestureDetector(
-                    onTap: () => _changeChannel('${index + 1}'),
-                    child: Card(
-                      color: Colors.blueGrey[700],
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                      child: Center(
-                        child: Text(
-                          '${index + 1}',
-                          style: const TextStyle(fontSize: 24, color: Colors.white),
+                    onTap: () => _changeChannel(index + 1),
+                    child: AnimatedContainer(
+                      duration: Duration(milliseconds: 500),
+                      decoration: BoxDecoration(
+                        color:  chNow.contains((index + 1).toString()) ? Colors.blue : Colors.blueGrey[800],
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                      child: Card(
+                        color: Colors.transparent,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                        child: Center(
+                          child: Text(
+                            '${index + 1}',
+                            style: const TextStyle(fontSize: 24, color: Colors.white),
+                          ),
                         ),
                       ),
                     ),
@@ -147,6 +238,21 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
   }
+}
 
+class AudioPacket {
+  final int channel;
+  final String data; // String base64
 
+  AudioPacket(this.channel, this.data);
+
+  Map<String, dynamic> toJson() => {
+    'channel': channel,
+    'data': data,
+  };
+
+  static AudioPacket fromJson(Map<String, dynamic> json) => AudioPacket(
+    json['channel'],
+    json['data'],
+  );
 }
