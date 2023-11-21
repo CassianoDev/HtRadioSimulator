@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -6,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:syncfusion_flutter_gauges/gauges.dart';
+import 'package:syncfusion_flutter_sliders/sliders.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'misc/AudioPacket.dart';
@@ -37,9 +40,9 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateMixin{
-  late AnimationController _controller;
-  late Animation<double> _needleAnimation;
+  double gain = 0.5; // Defina o ganho desejado aqui
 
+  double meterlevel = 0;
   int _channel = 1;
   bool ocupado = true;
   StreamSubscription? _mRecordingDataSubscription;
@@ -53,6 +56,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
   void _handleInactivity(int channel) {
     Future.delayed(Duration(seconds: 2), () {
       setState(() {
+
         chNow = chNow.replaceAll(channel.toString(), ""); // Remove o canal da string
         if (chNow.isEmpty) {
           // Se não houver mais canais ativos, você pode executar outras ações aqui
@@ -69,21 +73,60 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
 
 
   Future<void> _ligarMicrofone() async {
-
     var status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) {
       throw RecordingPermissionException('Microphone permission not granted');
     }
 
     await _mRecorder.openRecorder();
+    double lastRMS = 0.0;
+    double alpha = 0.1; // Fator de suavização
     var recordingDataController = StreamController<Food>();
     _mRecordingDataSubscription = recordingDataController.stream.listen((buffer) {
           if (buffer is FoodData) {
-            int maxValue = buffer.data!.reduce(max);
-            int minValue = buffer.data!.reduce(min);
-            double amplitude = (maxValue - minValue).toDouble();
-            print(amplitude);
-            updateMeter(amplitude);
+            Uint8List audioSamples = buffer.data!;
+            // Aplicando o ganho às amostras de áudio
+            for (int i = 0; i < audioSamples.length; i += 2) {
+              int sample = (audioSamples[i + 1] << 8) | audioSamples[i];
+              if (sample > 32767) sample -= 65536;
+
+              double amplifiedSample = sample * (gain * 1.5);
+              amplifiedSample = max(-32768, min(amplifiedSample, 32767));
+
+              audioSamples[i] = amplifiedSample.toInt() & 0xFF;
+              audioSamples[i + 1] = (amplifiedSample.toInt() >> 8) & 0xFF;
+            }
+            // Calcula o número total de amostras.
+            // Cada amostra PCM16 tem 2 bytes, então dividimos por 2 para obter o número de amostras.
+            int numSamples = audioSamples.length ~/ 2;
+            double sumOfSquares = 0.0;
+
+            // Itera sobre cada amostra de áudio.
+            for (int i = 0; i < numSamples; i++) {
+              // Calcula o índice da amostra atual no array Uint8List.
+              int sampleIndex = i * 2;
+
+              // Converte duas entradas de 8 bits (bytes) em uma amostra de 16 bits.
+              // Isso é feito deslocando o segundo byte 8 bits para a esquerda e fazendo um OR com o primeiro byte.
+              int sample = (audioSamples[sampleIndex + 1] << 8) | audioSamples[sampleIndex];
+
+              // Corrige a representação de sinal se a amostra for um número negativo.
+              // Em PCM16, os valores variam de -32768 a 32767.
+              // Subtrair 65536 de valores acima de 32767 os converte corretamente.
+              if (sample > 32767) sample -= 65536;
+
+              // Adiciona o quadrado da amostra ao somatório.
+              sumOfSquares += pow(sample, 2);
+            }
+
+            // Calcula a média dos quadrados das amostras.
+            double meanSquare = sumOfSquares / numSamples;
+
+            // Calcula a raiz quadrada da média, que é o valor RMS.
+            double rms = sqrt(meanSquare);
+
+            lastRMS = alpha * rms + (1 - alpha) * lastRMS;
+            updateMeter(mapRmsToVU(lastRMS));
             String base64Data = base64Encode(buffer.data!);
             var packet = AudioPacket(_channel, base64Data);
             channel.sink.add(jsonEncode(packet.toJson()));
@@ -104,26 +147,31 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     await _mRecorder.closeRecorder();
     await _mRecorder.stopRecorder();
   }
-  void updateMeter(double value) {
-    _needleAnimation = Tween<double>(begin: _needleAnimation.value, end: value / 255).animate(_controller);
-    _controller.forward(from: 0);
+  int mapRmsToVU(double rmsValue) {
+    double minRms = 100;
+    double maxRms = 20000;
+    double minVU = 0;
+    double maxVU = 255;
+
+    // Calcula o valor mapeado
+    double mappedValue = (rmsValue - minRms) * (maxVU - minVU) / (maxRms - minRms);
+
+    // Garante que o valor está dentro do intervalo de 0 a 255
+    return max(0, min(mappedValue.round(), 255));
+  }
+  void updateMeter(int value) {
+    setState(() {
+      meterlevel = value.toDouble();
+    });
   }
   @override
   void initState(){
+    Timer? resetTimer;
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 500),
-      vsync: this, //<this = esta classe como um todo
-    );
-
-    _needleAnimation = Tween<double>(begin: 0, end: 1).animate(_controller)
-      ..addListener(() {
-        setState(() {});
-      });
     FlutterSoundPlayer player = FlutterSoundPlayer();
-
     player.openPlayer(enableVoiceProcessing: false).then((value) {
-
+      double lastRMS = 0.0;
+      double alpha = 0.1; // Fator de suavização
       player.startPlayerFromStream(codec: Codec.pcm16, numChannels:1, sampleRate: 22100).then((value) {
         channel.stream.listen((event) async {
 
@@ -131,7 +179,45 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
 
           if (packet.channel == _channel) {
             Uint8List audioData = base64Decode(packet.data);// 'selectedChannel' é o canal escolhido pelo usuário
+            // Calcula o número total de amostras.
+            // Cada amostra PCM16 tem 2 bytes, então dividimos por 2 para obter o número de amostras.
+            int numSamples = audioData.length ~/ 2;
+            double sumOfSquares = 0.0;
+
+            // Itera sobre cada amostra de áudio.
+            for (int i = 0; i < numSamples; i++) {
+              // Calcula o índice da amostra atual no array Uint8List.
+              int sampleIndex = i * 2;
+
+              // Converte duas entradas de 8 bits (bytes) em uma amostra de 16 bits.
+              // Isso é feito deslocando o segundo byte 8 bits para a esquerda e fazendo um OR com o primeiro byte.
+              int sample = (audioData[sampleIndex + 1] << 8) | audioData[sampleIndex];
+
+              // Corrige a representação de sinal se a amostra for um número negativo.
+              // Em PCM16, os valores variam de -32768 a 32767.
+              // Subtrair 65536 de valores acima de 32767 os converte corretamente.
+              if (sample > 32767) sample -= 65536;
+
+              // Adiciona o quadrado da amostra ao somatório.
+              sumOfSquares += pow(sample, 2);
+            }
+
+            // Calcula a média dos quadrados das amostras.
+            double meanSquare = sumOfSquares / numSamples;
+
+            // Calcula a raiz quadrada da média, que é o valor RMS.
+            double rms = sqrt(meanSquare);
+
+            lastRMS = alpha * rms + (1 - alpha) * lastRMS;
+            updateMeter(mapRmsToVU(lastRMS));
             player.foodSink!.add(FoodData(audioData));
+            // Reinicia o temporizador a cada novo dado recebido
+            resetTimer?.cancel();
+            resetTimer = Timer(const Duration(milliseconds:100), () {
+              // Código para resetar o VU
+              updateMeter(mapRmsToVU(0));
+            });
+
           } else {
             if(chNow != packet.channel.toString()){
               setState(() {
@@ -190,7 +276,6 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            const Icon(Icons.settings_input_antenna, size: 60, color: Colors.white),
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -202,12 +287,36 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                 style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
               ),
             ),
-            Column(
+            Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                CustomPaint(
-                  painter: VUMeterPainter(_needleAnimation.value),
-                  child: Container(width: 300, height: 150),
+              children: [
+                SfSlider.vertical(
+                  value: gain,
+                  onChanged: (dynamic newValue){
+                    setState(() {
+                      gain = newValue;
+                    });
+                  },
+                ),
+                Container(
+                    width: 200,
+                    height: 190,
+
+                    child: SfRadialGauge(
+                        enableLoadingAnimation: true, animationDuration: 2500,
+                        axes: <RadialAxis>[
+                          RadialAxis(minimum: 0, maximum: 110,startAngle:180,endAngle: 360,
+                            axisLabelStyle: const GaugeTextStyle(
+                              color: Colors.white70, // Cor dos números
+                              fontSize: 12, // Tamanho da fonte
+                              // Outras propriedades de estilo, como fontWeight, fontFamily, etc.
+                            ),
+                            ranges: <GaugeRange>[
+                              GaugeRange(startValue: 0, endValue: 90, color:Colors.white),
+                              GaugeRange(startValue: 90,endValue: 110,color: Colors.white70)],
+                            pointers: <GaugePointer>[NeedlePointer(value: meterlevel,needleColor: Colors.white70,enableAnimation: true,animationDuration: 300,)],
+
+                          )])
                 ),
               ],
             ),
@@ -282,3 +391,18 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
 }
 
 
+class RMSBuffer {
+  final Queue<double> _buffer;
+  final int size;
+
+  RMSBuffer(this.size) : _buffer = Queue<double>();
+
+  void add(double value) {
+    if (_buffer.length == size) {
+      _buffer.removeFirst();
+    }
+    _buffer.addLast(value);
+  }
+
+  double get average => _buffer.isNotEmpty ? _buffer.reduce((a, b) => a + b) / _buffer.length : 0.0;
+}
