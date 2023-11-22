@@ -96,9 +96,11 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
               audioSamples[i] = amplifiedSample.toInt() & 0xFF;
               audioSamples[i + 1] = (amplifiedSample.toInt() >> 8) & 0xFF;
             }
+
             // Calcula o número total de amostras.
             // Cada amostra PCM16 tem 2 bytes, então dividimos por 2 para obter o número de amostras.
             int numSamples = audioSamples.length ~/ 2;
+
             double sumOfSquares = 0.0;
 
             // Itera sobre cada amostra de áudio.
@@ -111,12 +113,13 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
               int sample = (audioSamples[sampleIndex + 1] << 8) | audioSamples[sampleIndex];
 
               // Corrige a representação de sinal se a amostra for um número negativo.
-              // Em PCM16, os valores variam de -32768 a 32767.
+              // Em PCM16, -os valores variam de 32768 a 32767.
               // Subtrair 65536 de valores acima de 32767 os converte corretamente.
               if (sample > 32767) sample -= 65536;
 
               // Adiciona o quadrado da amostra ao somatório.
               sumOfSquares += pow(sample, 2);
+
             }
 
             // Calcula a média dos quadrados das amostras.
@@ -126,6 +129,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
             double rms = sqrt(meanSquare);
 
             lastRMS = alpha * rms + (1 - alpha) * lastRMS;
+
             updateMeter(mapRmsToVU(lastRMS));
             String base64Data = base64Encode(buffer.data!);
             var packet = AudioPacket(_channel, base64Data);
@@ -136,7 +140,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
       toStream: recordingDataController.sink,
       codec: Codec.pcm16,
       numChannels: 1,
-      sampleRate: 22100,
+      sampleRate: 22100, //<< 22.1Khz 20hz - 20Khz
     );
 
   }
@@ -301,7 +305,6 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                 Container(
                     width: 200,
                     height: 190,
-
                     child: SfRadialGauge(
                         enableLoadingAnimation: true, animationDuration: 2500,
                         axes: <RadialAxis>[
@@ -312,11 +315,15 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                               // Outras propriedades de estilo, como fontWeight, fontFamily, etc.
                             ),
                             ranges: <GaugeRange>[
-                              GaugeRange(startValue: 0, endValue: 90, color:Colors.white),
-                              GaugeRange(startValue: 90,endValue: 110,color: Colors.white70)],
-                            pointers: <GaugePointer>[NeedlePointer(value: meterlevel,needleColor: Colors.white70,enableAnimation: true,animationDuration: 300,)],
+                              GaugeRange(startValue: 0, endValue: 60, color:Colors.blueAccent),
+                              GaugeRange(startValue: 60, endValue: 90, color:Colors.blue,endWidth: 15,),
+                              GaugeRange(startValue: 90,endValue: 110,color: Colors.red,startWidth: 15,endWidth: 20,)],
+                            pointers: <GaugePointer>[
+                              NeedlePointer(value: meterlevel,needleColor: Colors.white70,enableAnimation: false,animationDuration: 300,)
+                            ],
 
-                          )])
+                          )]
+                    )
                 ),
               ],
             ),
