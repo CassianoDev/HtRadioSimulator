@@ -87,6 +87,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
             Uint8List audioSamples = buffer.data!;
             // Aplicando o ganho às amostras de áudio
             for (int i = 0; i < audioSamples.length; i += 2) {
+
               int sample = (audioSamples[i + 1] << 8) | audioSamples[i];
               if (sample > 32767) sample -= 65536;
 
