@@ -10,9 +10,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 import 'package:syncfusion_flutter_sliders/sliders.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-
 import 'misc/AudioPacket.dart';
-import 'misc/VUMeterPainter.dart';
+
 
 void main() {
   runApp(const MyApp());
@@ -39,24 +38,24 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateMixin{
+class _MyHomePageState extends State<MyHomePage> {
+  var oimundo = "Olá mundo!";
   double gain = 0.5; // Defina o ganho desejado aqui
 
   double meterlevel = 0;
   int _channel = 1;
   bool ocupado = true;
   StreamSubscription? _mRecordingDataSubscription;
-  Timer? _inactivityTimer;
 
   final FlutterSoundRecorder _mRecorder = FlutterSoundRecorder();
   String chNow = "0";
   var channel = WebSocketChannel.connect(
     Uri.parse('ws://168.138.149.216:7070/websocket'),
   );
-  void _handleInactivity(int channel) {
-    Future.delayed(Duration(seconds: 2), () {
-      setState(() {
 
+  void _handleInactivity(int channel) {
+    Future.delayed(const Duration(seconds: 2), () {
+      setState(() {
         chNow = chNow.replaceAll(channel.toString(), ""); // Remove o canal da string
         if (chNow.isEmpty) {
           // Se não houver mais canais ativos, você pode executar outras ações aqui
@@ -145,6 +144,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     );
 
   }
+
   void _desligarMicrofone() async {
     updateMeter(0);
     // Cancela a inscrição para parar a gravação
@@ -152,6 +152,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     await _mRecorder.closeRecorder();
     await _mRecorder.stopRecorder();
   }
+
   int mapRmsToVU(double rmsValue) {
     double minRms = 100;
     double maxRms = 20000;
@@ -164,16 +165,21 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
     // Garante que o valor está dentro do intervalo de 0 a 255
     return max(0, min(mappedValue.round(), 255));
   }
+
   void updateMeter(int value) {
     setState(() {
       meterlevel = value.toDouble();
     });
+
   }
+
   @override
   void initState(){
     Timer? resetTimer;
     super.initState();
+
     FlutterSoundPlayer player = FlutterSoundPlayer();
+
     player.openPlayer(enableVoiceProcessing: false).then((value) {
       double lastRMS = 0.0;
       double alpha = 0.1; // Fator de suavização
@@ -288,10 +294,11 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
-                'Canal: $_channel',
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                'CANAL: $_channel',
+                style: const TextStyle( fontSize: 30, fontFamily: "LC1",fontWeight: FontWeight.bold, color: Colors.white),
               ),
             ),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -303,13 +310,18 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                     });
                   },
                 ),
-                Container(
+                SizedBox(
                     width: 200,
                     height: 190,
                     child: SfRadialGauge(
-                        enableLoadingAnimation: true, animationDuration: 2500,
+                        enableLoadingAnimation: true,
+                        animationDuration: 2500,
                         axes: <RadialAxis>[
-                          RadialAxis(minimum: 0, maximum: 110,startAngle:180,endAngle: 360,
+                          RadialAxis(
+                            minimum: 0,
+                            maximum: 110,
+                            startAngle:180,
+                            endAngle: 400,
                             axisLabelStyle: const GaugeTextStyle(
                               color: Colors.white70, // Cor dos números
                               fontSize: 12, // Tamanho da fonte
@@ -318,9 +330,10 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                             ranges: <GaugeRange>[
                               GaugeRange(startValue: 0, endValue: 60, color:Colors.blueAccent),
                               GaugeRange(startValue: 60, endValue: 90, color:Colors.blue,endWidth: 15,),
-                              GaugeRange(startValue: 90,endValue: 110,color: Colors.red,startWidth: 15,endWidth: 20,)],
+                              GaugeRange(startValue: 90,endValue: 110,color: Colors.red,startWidth: 15,endWidth: 20,)
+                            ],
                             pointers: <GaugePointer>[
-                              NeedlePointer(value: meterlevel,needleColor: Colors.white70,enableAnimation: false,animationDuration: 300,)
+                              NeedlePointer(value: meterlevel,needleColor: Colors.white70,enableAnimation: false)
                             ],
 
                           )]
@@ -339,7 +352,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                   return GestureDetector(
                     onTap: () => _changeChannel(index + 1),
                     child: AnimatedContainer(
-                      duration: Duration(milliseconds: 500),
+                      duration: const Duration(milliseconds: 500),
                       decoration: BoxDecoration(
                         color:  chNow.contains((index + 1).toString()) ? Colors.blue : Colors.blueGrey[800],
                         borderRadius: BorderRadius.circular(15),
